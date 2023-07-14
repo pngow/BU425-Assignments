@@ -1,0 +1,219 @@
+---
+title: "A2"
+output: html_document
+date: "2022-11-23"
+---
+
+```{r}
+# sessionInfo()
+# install.packages("corrplot")
+# install.packages("e1071")
+# install.packages("glmnet")
+# install.packages("kernlab")
+# install.packages("caret")
+# remove.packages("ggplot2")
+# install.packages("ggplot2")
+# install.packages("rlang")
+# install.packages("factoextra")
+# install.packages("cluster")
+# install.packages("pROC")
+library("pROC")
+library("corrplot")
+library("e1071")
+library("glmnet")
+library("caret")
+library("plyr")
+library("class")
+library("kernlab")
+library("cluster")
+library("factoextra") # clustering algorithms & visualization
+```
+
+
+income and age are important considerations for segmentation
+```{r}
+# COLUMN EVALUATION
+
+# get data
+demographic_data <- read.csv("FordKa_demographic.csv", header=TRUE, sep=",")
+summary(demographic_data)
+psychographic_data <- read.csv("FordKa_psychographic.csv", header=TRUE, sep=",")
+summary(psychographic_data)
+
+# correlation matrix
+# demographic
+corr_dem <- cor(demographic_data)
+corrplot(corr_dem, method="number")
+drop_cols <- c("AgeCat", "ChildCat")
+reduced_demographic_data <- demographic_data[, !(names(demographic_data) %in% drop_cols)]
+# hc <- findCorrelation(corr_dem, cutoff=0.5)
+# hc = sort(hc)
+# reduced_demographic_data <- demographic_data[, -c(hc)]
+
+
+# psychographic
+corr_psy <- cor(psychographic_data)
+corrplot(corr_psy, method="number")
+hc <- findCorrelation(corr_psy, cutoff=0.5)
+hc = sort(hc)
+reduced_psychographic_data <- psychographic_data[, -c(hc)]
+
+# # convert to factor
+# cat_cols <- c("MaritalStatus", "IncomeCat")
+# demographic_data[cat_cols] <- lapply(demographic_data[cat_cols], as.factor)
+# str(demographic_data)
+# 
+# psychographic_data[, 2:ncol(psychographic_data)] <- lapply(psychographic_data[, 2:ncol(psychographic_data)], as.factor)
+# str(psychographic_data)
+
+# check missing values
+sapply(reduced_demographic_data, function(x) sum(is.null(x)))
+sapply(reduced_psychographic_data, function(x) sum(is.null(x)))
+```
+
+```{r}
+# change column name to match demographic name
+colnames(reduced_psychographic_data)[1] <- "respondent"
+# merge data
+combined_data <- merge(reduced_demographic_data, reduced_psychographic_data, by='respondent')
+# remove the respondent variable ... won't help establish patterns in the data
+combined_data <- combined_data[,2:ncol(combined_data)]
+
+# baseline
+table(combined_data$preference)
+144 / (144 + 106)
+
+# # normalize values (for clustering & knn)
+# # remove target variable ... unsupervised learning
+# norm_df <- as.data.frame(sapply(combined_data[,2:ncol(combined_data)], scale))
+# 
+# # randomly assign 3 (Middle) to classes 1/2
+# norm_df$preference <- combined_data$preference
+# norm_df$preference[norm_df$preference == 3] <- sample(x=1:2, size=length(norm_df$preference[norm_df$preference == 3]), replace = TRUE)
+
+# split into training / testing 
+set.seed(1)
+train_indices <- sample(nrow(combined_data)*0.8,)
+# randomly assign class 3 to classes 1/2
+combined_data$preference[combined_data$preference == 3] <- sample(x=1:2, size=length(combined_data$preference[combined_data$preference == 3]), replace = TRUE)
+# map preference (target feature) values to 0/1
+combined_data$preference <- mapvalues(combined_data$preference, c(1, 2), c(0, 1))
+# convert to factor
+combined_data$preference <- as.factor(combined_data$preference)
+
+unnorm_train_data <- combined_data[train_indices, ]
+unnorm_test_data <- combined_data[-train_indices, ]
+
+# create normalized data sets for k-means, knn, svm
+# norm_data <- as.data.frame(sapply(combined_data[,2:ncol(combined_data)], scale))
+# norm_train_data <- as.data.frame(sapply(unnorm_train_data[,2:ncol(unnorm_train_data)], scale))
+# norm_train_data$preference <- unnorm_train_data$preference
+# norm_test_data <- as.data.frame(sapply(unnorm_test_data[,2:ncol(unnorm_test_data)], scale))
+# norm_test_data$preference <- unnorm_test_data$preference
+norm_data <- scale(combined_data[,2:ncol(combined_data)])
+norm_train_data <- as.data.frame(scale(unnorm_train_data[,2:ncol(unnorm_train_data)]))
+norm_train_data$preference <- unnorm_train_data$preference
+str(norm_train_data)
+norm_test_data <- as.data.frame(scale(unnorm_test_data[,2:ncol(unnorm_test_data)]))
+norm_test_data$preference <- unnorm_test_data$preference
+```
+
+
+PEDICTIVE MODEL
+```{r}
+# # loocv becuase the dataset is small 
+# svm_model <- train(preference ~ ., method="svmLinear2", data=norm_train_data, trControl=trainControl(method="LOOCV"))
+# 
+# # svm_model <- svm(preference ~ ., data=norm_train_data, kernel="sigmoid", type="C-classification", cost=0.1)
+# pred_train_fit <- predict(svm_model, newdata=norm_train_data)
+# pred_test_fit <- predict(svm_model, newdata=norm_test_data)
+# 
+# confusionMatrix(as.factor(norm_train_data$preference), as.factor(pred_train_fit))
+# confusionMatrix(as.factor(norm_test_data$preference), as.factor(pred_test_fit))
+```
+
+```{r}
+# # lave one out cross validation (bc small dataset)
+# x <- as.matrix(unnorm_train_data[,2:ncol(unnorm_train_data)])
+# y <- unnorm_train_data$preference
+# log_reg <- cv.glmnet(x, y, family="binomial", type.measure="class", alpha=1)
+# log_reg <- glmnet(x=x, y=y, alpha=1, family="binomial", type.measure="class", lambda=cross_val$lambda.min)
+
+log_reg <- glm(preference ~ ., data=unnorm_train_data, family="binomial")
+summary(log_reg)
+
+# feature selection 
+step_log_reg <- step(log_reg, direction = "both")
+summary(step_log_reg)
+```
+
+```{r}
+# performance on training set
+log_reg_train_pred <- ifelse(log_reg$fitted.values >0.5,1,0)
+table(log_reg_train_pred)
+confusionMatrix(as.factor(unnorm_train_data$preference), as.factor(log_reg_train_pred))
+
+# predict on the test set
+pred_fit <- predict(log_reg, unnorm_test_data, type="response")
+log_reg_prediction <- ifelse(pred_fit >0.5,1,0)
+table(log_reg_prediction)
+
+confusionMatrix(as.factor(unnorm_test_data$preference), as.factor(log_reg_prediction))
+
+test_roc = roc(unnorm_test_data$preference ~ 
+                 log_reg_prediction, plot = TRUE, print.auc = TRUE)
+
+# compute auc
+auc(test_roc)
+```
+
+
+EXPLORATORY MODEL
+```{r}
+# # principal component - reduce features and find ones that are most relevant 
+# pca <- prcomp(norm_df)
+# # weights & summary
+# pca$rot
+# summary(pca)
+# 
+# # use the first 40 pcs, explain ~92% of the variance in the data
+# sum(summary(pca)$importance[2,1:40])
+# 
+# pcs <- pca$x[,1:40]
+```
+
+```{r}
+
+# find optimal k - find elbow in graph with clusters x within cluster sum of squares
+# set.seed(1)
+# wss <- NULL
+# ss <- NULL
+# for (i in 1:10) {
+#   fit <- kmeans(norm_data, centers = i)
+#   wss <- c(wss, fit$tot.withinss)
+#   # ss <- c(ss, mean(silhouette(fit$cluster, dist(norm_data))[,3]))
+# }
+# 
+# plot(1:10, wss, type="o")
+fviz_nbclust(norm_data,kmeans,method="silhouette",k.max = 10)
+fviz_nbclust(norm_data,kmeans,method="wss",k.max = 10)
+```
+
+```{r}
+kmeans_model <- kmeans(norm_data, centers=4)
+t(apply(kmeans_model$centers, 1, function(x) x * attr(norm_data, 'scaled:scale') + attr(norm_data, 'scaled:center')))
+kmeans_model$centers
+kmeans_model$cluster
+
+fviz_cluster(kmeans_model, geom = "point", data = norm_data) + ggtitle("K-Means (k = 4)")
+kmeans_model$withinss
+kmeans_model$tot.withinss
+kmeans_model$betweenss
+kmeans_model$betweenss / 4
+kmeans_model$size
+kmeans_model$totss
+
+1 - kmeans_model$tot.withinss / kmeans_model$totss
+kmeans_model$betweenss /kmeans_model$totss
+# silhouette(kmeans_model$cluster, dist(norm_data))
+```
