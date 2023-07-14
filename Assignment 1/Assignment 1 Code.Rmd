@@ -1,0 +1,309 @@
+---
+title: "ngow1890_A1"
+output: html_notebook
+---
+
+```{r}
+# initial installation of packages
+# install.packages("tidyverse")
+# install.packages("readxl")
+# install.packages("leaps")
+# install.packages("caret")
+# install.packages("pROC")
+# install.packages("rpart.plot")
+# install.packages("forecast")
+
+# load packages into R
+library("readxl")
+library("leaps")
+library("caret")
+library("pROC")
+library("rpart")
+library("rpart.plot")
+library("forecast")
+```
+
+```{r}
+# read data into R from xlsx file
+data <- read_excel(path="Student_Spreadsheet_UVAQA0807X.xlsx", sheet="Data")
+
+# evaluate data
+View(data)
+str(data)
+```
+
+```{r}
+# check number of unique values in each column - indication of categorical levels
+# sapply(sapply(data, unique), length)
+
+# convert state, region to factor (categorical) type
+data$State <- as.factor(data$State)
+data$Region <- as.factor(data$Region)
+data$ElectionType <- as.factor(data$ElectionType)
+
+# convert election date to date
+data$ElectionDate <- as.Date(data$ElectionDate)
+
+# convert to numeric
+convert_to_num <- c("FIPS", "TotalVote", "Clinton", "Obama", "HighSchool", "MedianIncome", "AverageIncome", "Medicare", "MedicareRate", "SocialSecurity", "SocialSecurityRate", "Disabilities", "DisabilitiesRate", "Pop", "LandArea", "FarmArea", "Black", "Asian", "AmericanIndian", "Bachelors", "IncomeAbove75K", "ManfEmploy", "SpeakingNonEnglish", "Homeowner", "SameHouse1995and2000")
+data[convert_to_num] <- sapply(data[convert_to_num], as.numeric)
+
+View(data)
+```
+
+```{r}
+str(data)
+summary(data)
+```
+
+```{r}
+# NOTE not a complete dataset of the US population ... some states missing voting data / demographic data (exhibit 2 footnotes)
+sapply(data, function(x) sum(is.na(x)))
+
+# get the mean for each column
+data_mean <- sapply(data[,10:41],mean, na.rm=TRUE)
+
+# Impute the missing data. Loop through all the rows and for each column. C call the function impute_train_data.
+for(i in colnames(data[,10:41])) {
+  data[,i][is.na(data[,i])] <- data_mean[i]
+}
+
+sapply(data, function(x) sum(is.na(x)))
+
+View(data)
+```
+
+
+```{r}
+data$Obama_margin <- data$Obama - data$Clinton
+data$Obama_margin_percent <- data$Obama_margin/data$TotalVote
+data$Obama_wins <- ifelse(data$Obama_margin >0, 1,0)
+names(data)
+
+View(data)
+```
+
+```{r}
+# # check how much of the dataset still needs to cast their votes
+nrow(data[is.na(data$TotalVote),])
+
+# split training / testing sets
+set.seed(1)
+# omit features that have unique values for each record (county, fips)
+features <- c(3,5:ncol(data))
+# test <- data[is.na(data$TotalVote), features]
+# train <- data[-is.na(data$TotalVote), features]
+
+# testIndexes <- sample(1:nrow(data), 0.2*nrow(data))
+# train <- data[-testIndexes, features]
+# test <- data[testIndexes, features]
+
+# use historical data (where people already cast their votes) to train the model
+temp_train <- data[data$ElectionDate < as.Date("2/19/2008", format="%m/%d/%Y"), ]
+# use data from locations that haven't voted to see whether they will or not
+temp_test <- data[data$ElectionDate >= as.Date("2/19/2008", format="%m/%d/%Y"), ]
+testStates <- temp_test$State
+test <- temp_test[, features]
+
+# create
+set.seed(1)
+trainIndexes <- sample(1:nrow(temp_train), 0.75*nrow(temp_train))
+train <- temp_train[trainIndexes,features]
+validate <- temp_train[-trainIndexes,features]
+
+train
+validate
+test
+```
+
+```{r}
+hist(data$MedianIncome, breaks=15, main="Median Income of All Voters")
+options(scipen=999)
+mean(data$MedianIncome)
+mean(data$AverageIncome)
+
+# Clinton voters
+clintonData <- data[data$Obama_margin < 0,]
+hist(clintonData$MedianIncome, breaks=15, main="Median Income of Clinton Voters")
+options(scipen=999)
+
+hist(clintonData$ManfEmploy, breaks=10, main="Clinton Voters in Manufacturing")
+clintonVoterManu <- boxplot(clintonData$ManfEmploy, outline=FALSE, main="Clinton Voters in Manufacturing")
+clintonVoterManuStats <- clintonVoterManu$stats
+rownames(clintonVoterManuStats)<-c("Min","First Quartile","Median","Third Quartile","Maximum")
+options(scipen=999)
+clintonVoterManuStats
+
+# Obama voters
+obamaData <- data[data$Obama_margin > 0,]
+hist(obamaData$MedianIncome, breaks=15, main="Median Income of Obama Voters")
+options(scipen=999)
+
+hist(obamaData$ManfEmploy, breaks=10, main="Obama Voters in Manufacturing")
+boxplot(obamaData$ManfEmploy, outline=FALSE, main="Obama Voters in Manufacturing")
+options(scipen=999)
+
+plot(obamaData$Region, main="Obama Voters per Region", xlab="Regions", ylab="Count")
+obamaFarmland <- aggregate(obamaData$FarmArea, list(obamaData$Region), FUN=sum, na.rm=TRUE)
+obamaRemLand <- aggregate(obamaData$LandArea, list(obamaData$Region), FUN=sum, na.rm=TRUE)
+obamapercentFarmland <- obamaFarmland / obamaRemLand
+obamaFarmland
+obamaRemLand
+obamapercentFarmland
+
+# No votes
+noVoterData <- data[data$ElectionDate >= as.Date("2/19/2008", format="%m/%d/%Y"), ]
+hist(noVoterData$MedianIncome, breaks=15, main="Median Income of Remaining Voters")
+options(scipen=999)
+
+hist(noVoterData$ManfEmploy, breaks=15, main="Remaining Voters in Manufacturing")
+remVoterManu <- boxplot(noVoterData$ManfEmploy, outline=FALSE, main="Remaining Voters in Manufacturing")
+remVoterManuStats <- remVoterManu$stats
+rownames(remVoterManuStats)<-c("Min","First Quartile","Median","Third Quartile","Maximum")
+options(scipen=999)
+remVoterManuStats
+
+plot(noVoterData$Region, main="Remaining Voters per Region", xlab="Regions", ylab="Count")
+plot(noVoterData$State, main="Remaining Voters per State", xlab="States", ylab="Count")
+
+aggregate(noVoterData$MedianIncome, list(noVoterData$Region), FUN=median, na.rm=TRUE)
+
+sumRemFarmland <- aggregate(noVoterData$FarmArea, list(noVoterData$Region), FUN=sum, na.rm=TRUE)
+sumRemLand <- aggregate(noVoterData$LandArea, list(noVoterData$Region), FUN=sum, na.rm=TRUE)
+percentFarmland <- sumRemFarmland / sumRemLand
+sumRemFarmland
+sumRemLand
+percentFarmland
+```
+
+```{r}
+linReg <- lm(Obama_margin_percent ~ . -Obama_margin -Obama_wins -Obama -Clinton -TotalVote -ElectionDate, data=train)
+summary(linReg)
+```
+
+```{r}
+linReg_backwards <- step(linReg, direction="backward")
+summary(linReg_backwards)
+```
+
+```{r}
+# evaluate model against validation set
+linRegValidPred <- predict(linReg_backwards,validate)
+summary(linRegValidPred)
+linear_valid_residuals <- linRegValidPred - validate$Obama_margin_percent
+
+hist(linear_valid_residuals, main="Margin Validation Set Residuals")
+
+# Q <- quantile(linear_valid_residuals, probs=c(.25, .75), na.rm = FALSE)
+# iqr <- IQR(linear_valid_residuals)
+# residualNoOutliers <- subset(linear_valid_residuals, linear_valid_residuals > (Q[1] - 1.5*iqr) & linear_valid_residuals < (Q[2]+1.5*iqr))
+# hist(residualNoOutliers, main="Margin Validation Set Residuals")
+
+hist(residualNoOutliers, main="Margin Validation Set Residuals", breaks=100, xlim=c(-0.1, 0.1))
+plot(linRegValidPred, linear_valid_residuals, main="Margin Validation Residual Plot")
+
+"Min, Max of Obama_margin_percent"
+min(validate$Obama_margin_percent)
+max(validate$Obama_margin_percent)
+"Training Set"
+accuracy(linReg_backwards$fitted.values,train$Obama_margin_percent)
+"Validation Set"
+accuracy(linRegValidPred,validate$Obama_margin_percent)
+
+```
+
+
+```{r}
+# predict whether obama will win 0.0113269
+decTreeClass <- rpart(Obama_wins ~ . -Obama_margin -Obama_margin_percent -Obama -Clinton -TotalVote -ElectionDate, data=train, method='class',cp=0.0113269)
+summary(decTreeClass)
+
+decTreeClass$splits
+
+# plot tree
+prp(decTreeClass, type = 1, extra = 1, under = TRUE, split.font = 1, varlen = -10,  box.palette=c("red", "green"))
+
+rsq.rpart(decTreeClass)
+```
+```{r}
+decTreeClassValidPred <- predict(decTreeClass,validate, type='class')
+summary(decTreeClassValidPred)
+decTree_valid_residuals <- as.numeric(decTreeClassValidPred) - validate$Obama_wins
+
+
+# obama = 1, clinton 0
+decTreePred <- as.factor(decTreeClassValidPred)
+
+nlevels(decTreeClassValidPred)
+nlevels(validate$Obama_wins)
+
+confusionMatrix(decTreeClassValidPred, as.factor(validate$Obama_wins))
+
+hist(decTree_valid_residuals, main="Obama Win Validation Set Residuals", breaks=15)
+plot(decTreeClassValidPred, decTree_valid_residuals, main="Obama Win Validation Residual Plot")
+
+test_roc = roc(as.numeric(validate$Obama_wins) ~
+                 as.numeric(decTreeClassValidPred), plot = TRUE, print.auc = TRUE)
+
+# compute auc
+auc(test_roc)
+
+```
+
+
+
+```{r}
+# make predictions of votes for the remaining voters
+linRegFinalPrediction <- predict(linReg_backwards, newdata=test)
+decTreeFinalPrediction <- predict(decTreeClass, newdata=test)
+# logRegFinalPrediction <- predict(logReg_backwards, newdata=test)
+
+
+voted <- aggregate(temp_train$Obama_wins, list(temp_train$State), FUN=sum)
+votedCounties <- aggregate(temp_train$State, list(temp_train$State), FUN=length)
+votedResults <- voted / votedCounties
+votedResults$Group.1 <- voted[,1]
+votedResults$ObamaWin <- ifelse(votedResults[,2] > 0.5, 1, 0)
+sum(votedResults$ObamaWin)
+votedResults
+
+# determine if obama wins (> 0 margin) ... check if percentage of wins in counties is over 50%
+convertLinReg <- ifelse(linRegFinalPrediction > 0, 1, 0)
+linObamaVotes <- aggregate(convertLinReg, list(testStates), FUN=sum)
+allCounties <- aggregate(convertLinReg, list(testStates), FUN=length)
+
+linRegFinal <- linObamaVotes / allCounties
+linRegFinal$Group.1 <- linObamaVotes[,1]
+linObamaVotes
+allCounties
+
+sum(linRegFinalPrediction) / length(linRegFinalPrediction)
+
+linRegFinal$ObamaWin <- ifelse(linRegFinal[,2] > 0.5, 1, 0)
+linRegFinal
+sum(linRegFinal$ObamaWin) / length(linRegFinal$ObamaWin)
+
+# obama prediction column (2)
+convertDecTree <- ifelse(decTreeFinalPrediction[,2] > 0.5, 1, 0)
+decObamaVotes <- aggregate(convertDecTree, list(testStates), FUN=sum)
+
+decTreeFinal <- decObamaVotes / allCounties
+decTreeFinal$Group.1 <- decObamaVotes[,1]
+decObamaVotes
+allCounties
+
+decTreeFinal$ObamaWin <- ifelse(decTreeFinal[,2] > 0.5, 1, 0)
+decTreeFinal
+sum(decTreeFinal$ObamaWin) / length(decTreeFinal$ObamaWin)
+```
+
+17 Obama
+13 Clinton
+
+16 remaining
+
+17+8 = 25 Obama
+13+8 = 21 Clinton
+
+17+6 = 23 Obama
+13+11 = 23 Clinton
